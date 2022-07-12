@@ -96,6 +96,7 @@ add_port () {
                 ;;
         esac
     done
+    set -uex
 
     # Check if a port is already attached for the given container and interface
     PORT=`get_port_for_container_interface "$CONTAINER" "$INTERFACE" \
@@ -133,7 +134,7 @@ add_port () {
         ip link delete "${PORTNAME}_l"
         exit 1
     fi
-    set -uex
+
     echo "${PORTNAME}_l"
     ip link set "${PORTNAME}_l" up
 
@@ -154,7 +155,7 @@ add_port () {
         ip netns exec "$PID" ip link set dev "$INTERFACE" address "$MACADDRESS"
         ovs-vsctl  set Interface "${PORTNAME}_l"   external-ids:attached-mac="$MACADDRESS" external-ids:iface-status=active
         echo "ovn bind example: "
-        echo "ovs-vsctl  set Interface "${PORTNAME}_l" external_ids:iface-id=ls1_port"
+        echo "ovs-vsctl  set Interface "${PORTNAME}_l" external_ids:iface-id="
     fi
 
     if [ -n "$GATEWAY" ]; then
