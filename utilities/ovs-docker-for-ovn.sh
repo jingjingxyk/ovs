@@ -153,7 +153,7 @@ add_port () {
     if [ -n "$MACADDRESS" ]; then
         ip netns exec "$PID" ip link set dev "$INTERFACE" address "$MACADDRESS"
         ovs-vsctl  set Interface "${PORTNAME}_l"   external-ids:attached-mac="$MACADDRESS" external-ids:iface-status=active
-        echo "ovn bind example"
+        echo "ovn bind example: "
         echo "ovs-vsctl  set Interface "${PORTNAME}_l" external_ids:iface-id=ls1_port"
     fi
 
