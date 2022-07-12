@@ -133,7 +133,7 @@ add_port () {
         ip link delete "${PORTNAME}_l"
         exit 1
     fi
-
+    echo "${PORTNAME}_l"
     ip link set "${PORTNAME}_l" up
 
     # Move "${PORTNAME}_c" inside the container and changes its name.
