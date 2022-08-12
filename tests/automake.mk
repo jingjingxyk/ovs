@@ -100,6 +100,7 @@ TESTSUITE_AT = \
 	tests/ovsdb-rbac.at \
 	tests/ovs-vsctl.at \
 	tests/ovs-xapi-sync.at \
+	tests/pytest.at \
 	tests/stp.at \
 	tests/rstp.at \
 	tests/interface-reconfigure.at \
@@ -342,12 +343,6 @@ EXTRA_DIST += tests/run-ryu
 check-kernel: all
 	set $(SHELL) '$(SYSTEM_KMOD_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)'; \
 	"$$@" $(TESTSUITEFLAGS) -j1 || (test X'$(RECHECK)' = Xyes && "$$@" --recheck)
-
-# Testing the out of tree Kernel module
-check-kmod: all
-	$(MAKE) modules_install
-	modprobe -r -a vport-geneve vport-gre vport-lisp vport-stt vport-vxlan openvswitch
-	$(MAKE) check-kernel
 
 check-system-userspace: all
 	set $(SHELL) '$(SYSTEM_USERSPACE_TESTSUITE)' -C tests  AUTOTEST_PATH='$(AUTOTEST_PATH)'; \

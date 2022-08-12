@@ -91,9 +91,6 @@ function install_kernel()
         sudo sed -i '/^# define __always_inline .*/i # undef __always_inline' \
                     /usr/include/x86_64-linux-gnu/sys/cdefs.h || true
         EXTRA_OPTS="${EXTRA_OPTS} --enable-afxdp"
-    else
-        EXTRA_OPTS="${EXTRA_OPTS} --with-linux=$(pwd)"
-        echo "Installed kernel source in $(pwd)"
     fi
     popd
 }
@@ -187,30 +184,41 @@ function configure_ovs()
 
 function build_ovs()
 {
-    local KERNEL=$1
-
     configure_ovs $OPTS
     make selinux-policy
 
-    # Only build datapath if we are testing kernel w/o running testsuite and
-    # AF_XDP support.
-    if [ "${KERNEL}" ] && ! [ "$AFXDP" ]; then
-        pushd datapath
-        make -j4
-        popd
-    else
-        make -j4
-    fi
+    make -j4
 }
 
 if [ "$DEB_PACKAGE" ]; then
+    ./boot.sh && ./configure --with-dpdk=$DPDK && make debian
     mk-build-deps --install --root-cmd sudo --remove debian/control
     dpkg-checkbuilddeps
-    DEB_BUILD_OPTIONS='parallel=4 nocheck' fakeroot debian/rules binary
-    # Not trying to install ipsec package as there are issues with system-wide
-    # installed python3-openvswitch package and the pyenv used by Travis.
-    packages=$(ls $(pwd)/../*.deb | grep -v ipsec)
-    sudo apt install ${packages}
+    make debian-deb
+    packages=$(ls $(pwd)/../*.deb)
+    deps=""
+    for pkg in $packages; do
+        _ifs=$IFS
+        IFS=","
+        for dep in $(dpkg-deb -f $pkg Depends); do
+            dep_name=$(echo "$dep"|awk '{print$1}')
+            # Don't install internal package inter-dependencies from apt
+            echo $dep_name | grep -q openvswitch && continue
+            deps+=" $dep_name"
+        done
+        IFS=$_ifs
+    done
+    # install package dependencies from apt
+    echo $deps | xargs sudo apt -y install
+    # install the locally built openvswitch packages
+    sudo dpkg -i $packages
+
+    # Check that python C extension is built correctly.
+    python3 -c "
+from ovs import _json
+import ovs.json
+assert ovs.json.from_string('{\"a\": 42}') == {'a': 42}"
+
     exit 0
 fi
 
@@ -244,20 +252,17 @@ fi
 if [ "$ASAN" ]; then
     # This will override default option configured in tests/atlocal.in.
     export ASAN_OPTIONS='detect_leaks=1'
-    # -O2 generates few false-positive memory leak reports in test-ovsdb
-    # application, so lowering optimizations to -O1 here.
-    CFLAGS_ASAN="-O1 -fno-omit-frame-pointer -fno-common -fsanitize=address"
+    CFLAGS_ASAN="-fno-omit-frame-pointer -fno-common -fsanitize=address"
     CFLAGS_FOR_OVS="${CFLAGS_FOR_OVS} ${CFLAGS_ASAN}"
 fi
 
 if [ "$UBSAN" ]; then
     # Use the default options configured in tests/atlocal.in, in UBSAN_OPTIONS.
-    CFLAGS_UBSAN="-O1 -fno-omit-frame-pointer -fno-common -fsanitize=undefined"
+    CFLAGS_UBSAN="-fno-omit-frame-pointer -fno-common -fsanitize=undefined"
     CFLAGS_FOR_OVS="${CFLAGS_FOR_OVS} ${CFLAGS_UBSAN}"
 fi
 
-save_OPTS="${OPTS} $*"
-OPTS="${EXTRA_OPTS} ${save_OPTS}"
+OPTS="${EXTRA_OPTS} ${OPTS} $*"
 
 if [ "$TESTSUITE" ]; then
     # 'distcheck' will reconfigure with required options.
@@ -268,20 +273,7 @@ if [ "$TESTSUITE" ]; then
     make distcheck -j4 CFLAGS="${CFLAGS_FOR_OVS}" \
         TESTSUITEFLAGS=-j4 RECHECK=yes
 else
-    if [ -z "${KERNEL_LIST}" ]; then build_ovs ${KERNEL};
-    else
-        save_EXTRA_OPTS="${EXTRA_OPTS}"
-        for KERNEL in ${KERNEL_LIST}; do
-            echo "=============================="
-            echo "Building with kernel ${KERNEL}"
-            echo "=============================="
-            EXTRA_OPTS="${save_EXTRA_OPTS}"
-            install_kernel ${KERNEL}
-            OPTS="${EXTRA_OPTS} ${save_OPTS}"
-            build_ovs ${KERNEL}
-            make distclean
-        done
-    fi
+    build_ovs
 fi
 
 exit 0

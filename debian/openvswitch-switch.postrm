@@ -29,7 +29,15 @@ case "$1" in
         rm -f /etc/openvswitch/system-id.conf
         ;;
 
-    remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)
+    abort-upgrade)
+        conffile="/etc/default/openvswitch-switch"
+        if [ -f "${conffile}.dpkg-bak" ] && [ ! -f "${conffile}" ]; then
+            # we backed up the old conffile, but upgrade is aborted - restore
+            mv "${conffile}.dpkg-bak" "${conffile}"
+        fi
+        ;;
+
+    remove|upgrade|failed-upgrade|abort-install|disappear)
         ;;
 
     *)

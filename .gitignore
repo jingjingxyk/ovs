@@ -34,7 +34,6 @@
 /Makefile
 /Makefile.in
 /aclocal.m4
-/all-distfiles
 /all-gitfiles
 /autom4te.cache
 /build-arch-stamp
@@ -68,6 +67,7 @@ TAGS
 cscope.*
 tags
 _debian
+_dpdk
 odp-netlink.h
 odp-netlink-macros.h
 OvsDpInterface.h

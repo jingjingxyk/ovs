@@ -47,14 +47,30 @@ static unsigned int ct_dpif_netdev_tp_def[] = {
 };
 
 static struct timeout_policy *
-timeout_policy_lookup(struct conntrack *ct, int32_t tp_id)
+timeout_policy_lookup_protected(struct conntrack *ct, int32_t tp_id)
     OVS_REQUIRES(ct->ct_lock)
 {
     struct timeout_policy *tp;
     uint32_t hash;
 
     hash = hash_int(tp_id, ct->hash_basis);
-    HMAP_FOR_EACH_IN_BUCKET (tp, node, hash, &ct->timeout_policies) {
+    CMAP_FOR_EACH_WITH_HASH_PROTECTED (tp, node, hash,
+                                       &ct->timeout_policies) {
+        if (tp->policy.id == tp_id) {
+            return tp;
+        }
+    }
+    return NULL;
+}
+
+static struct timeout_policy *
+timeout_policy_lookup(struct conntrack *ct, int32_t tp_id)
+{
+    struct timeout_policy *tp;
+    uint32_t hash;
+
+    hash = hash_int(tp_id, ct->hash_basis);
+    CMAP_FOR_EACH_WITH_HASH (tp, node, hash, &ct->timeout_policies) {
         if (tp->policy.id == tp_id) {
             return tp;
         }
@@ -65,17 +81,7 @@ timeout_policy_lookup(struct conntrack *ct, int32_t tp_id)
 struct timeout_policy *
 timeout_policy_get(struct conntrack *ct, int32_t tp_id)
 {
-    struct timeout_policy *tp;
-
-    ovs_mutex_lock(&ct->ct_lock);
-    tp = timeout_policy_lookup(ct, tp_id);
-    if (!tp) {
-        ovs_mutex_unlock(&ct->ct_lock);
-        return NULL;
-    }
-
-    ovs_mutex_unlock(&ct->ct_lock);
-    return tp;
+    return timeout_policy_lookup(ct, tp_id);
 }
 
 static void
@@ -125,27 +131,30 @@ timeout_policy_create(struct conntrack *ct,
     init_default_tp(tp, tp_id);
     update_existing_tp(tp, new_tp);
     hash = hash_int(tp_id, ct->hash_basis);
-    hmap_insert(&ct->timeout_policies, &tp->node, hash);
+    cmap_insert(&ct->timeout_policies, &tp->node, hash);
 }
 
 static void
 timeout_policy_clean(struct conntrack *ct, struct timeout_policy *tp)
     OVS_REQUIRES(ct->ct_lock)
 {
-    hmap_remove(&ct->timeout_policies, &tp->node);
-    free(tp);
+    uint32_t hash = hash_int(tp->policy.id, ct->hash_basis);
+    cmap_remove(&ct->timeout_policies, &tp->node, hash);
+    ovsrcu_postpone(free, tp);
 }
 
 static int
-timeout_policy_delete__(struct conntrack *ct, uint32_t tp_id)
+timeout_policy_delete__(struct conntrack *ct, uint32_t tp_id,
+                        bool warn_on_error)
     OVS_REQUIRES(ct->ct_lock)
 {
+    struct timeout_policy *tp;
     int err = 0;
-    struct timeout_policy *tp = timeout_policy_lookup(ct, tp_id);
 
+    tp = timeout_policy_lookup_protected(ct, tp_id);
     if (tp) {
         timeout_policy_clean(ct, tp);
-    } else {
+    } else if (warn_on_error) {
         VLOG_WARN_RL(&rl, "Failed to delete a non-existent timeout "
                      "policy: id=%d", tp_id);
         err = ENOENT;
@@ -159,7 +168,7 @@ timeout_policy_delete(struct conntrack *ct, uint32_t tp_id)
     int err;
 
     ovs_mutex_lock(&ct->ct_lock);
-    err = timeout_policy_delete__(ct, tp_id);
+    err = timeout_policy_delete__(ct, tp_id, true);
     ovs_mutex_unlock(&ct->ct_lock);
     return err;
 }
@@ -170,7 +179,7 @@ timeout_policy_init(struct conntrack *ct)
 {
     struct timeout_policy tp;
 
-    hmap_init(&ct->timeout_policies);
+    cmap_init(&ct->timeout_policies);
 
     /* Create default timeout policy. */
     memset(&tp, 0, sizeof tp);
@@ -182,14 +191,11 @@ int
 timeout_policy_update(struct conntrack *ct,
                       struct timeout_policy *new_tp)
 {
-    int err = 0;
     uint32_t tp_id = new_tp->policy.id;
+    int err = 0;
 
     ovs_mutex_lock(&ct->ct_lock);
-    struct timeout_policy *tp = timeout_policy_lookup(ct, tp_id);
-    if (tp) {
-        err = timeout_policy_delete__(ct, tp_id);
-    }
+    timeout_policy_delete__(ct, tp_id, false);
     timeout_policy_create(ct, new_tp);
     ovs_mutex_unlock(&ct->ct_lock);
     return err;
@@ -230,27 +236,6 @@ tm_to_ct_dpif_tp(enum ct_timeout tm)
     return CT_DPIF_TP_ATTR_MAX;
 }
 
-static void
-conn_update_expiration__(struct conntrack *ct, struct conn *conn,
-                         enum ct_timeout tm, long long now,
-                         uint32_t tp_value)
-    OVS_REQUIRES(conn->lock)
-{
-    ovs_mutex_unlock(&conn->lock);
-
-    ovs_mutex_lock(&ct->ct_lock);
-    ovs_mutex_lock(&conn->lock);
-    if (!conn->cleaned) {
-        conn->expiration = now + tp_value * 1000;
-        ovs_list_remove(&conn->exp_node);
-        ovs_list_push_back(&ct->exp_lists[tm], &conn->exp_node);
-    }
-    ovs_mutex_unlock(&conn->lock);
-    ovs_mutex_unlock(&ct->ct_lock);
-
-    ovs_mutex_lock(&conn->lock);
-}
-
 /* The conn entry lock must be held on entry and exit. */
 void
 conn_update_expiration(struct conntrack *ct, struct conn *conn,
@@ -260,41 +245,22 @@ conn_update_expiration(struct conntrack *ct, struct conn *conn,
     struct timeout_policy *tp;
     uint32_t val;
 
-    ovs_mutex_unlock(&conn->lock);
-
-    ovs_mutex_lock(&ct->ct_lock);
-    ovs_mutex_lock(&conn->lock);
     tp = timeout_policy_lookup(ct, conn->tp_id);
     if (tp) {
         val = tp->policy.attrs[tm_to_ct_dpif_tp(tm)];
     } else {
         val = ct_dpif_netdev_tp_def[tm_to_ct_dpif_tp(tm)];
     }
-    ovs_mutex_unlock(&conn->lock);
-    ovs_mutex_unlock(&ct->ct_lock);
-
-    ovs_mutex_lock(&conn->lock);
     VLOG_DBG_RL(&rl, "Update timeout %s zone=%u with policy id=%d "
                 "val=%u sec.",
                 ct_timeout_str[tm], conn->key.zone, conn->tp_id, val);
 
-    conn_update_expiration__(ct, conn, tm, now, val);
+    atomic_store_relaxed(&conn->expiration, now + val * 1000);
 }
 
-static void
-conn_init_expiration__(struct conntrack *ct, struct conn *conn,
-                       enum ct_timeout tm, long long now,
-                       uint32_t tp_value)
-{
-    conn->expiration = now + tp_value * 1000;
-    ovs_list_push_back(&ct->exp_lists[tm], &conn->exp_node);
-}
-
-/* ct_lock must be held. */
 void
 conn_init_expiration(struct conntrack *ct, struct conn *conn,
                      enum ct_timeout tm, long long now)
-    OVS_REQUIRES(ct->ct_lock)
 {
     struct timeout_policy *tp;
     uint32_t val;
@@ -309,5 +275,5 @@ conn_init_expiration(struct conntrack *ct, struct conn *conn,
     VLOG_DBG_RL(&rl, "Init timeout %s zone=%u with policy id=%d val=%u sec.",
                 ct_timeout_str[tm], conn->key.zone, conn->tp_id, val);
 
-    conn_init_expiration__(ct, conn, tm, now, val);
+    conn->expiration = now + val * 1000;
 }

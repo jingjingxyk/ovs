@@ -184,6 +184,7 @@ Han Ding                           handing@chinatelecom.cn
 Han Zhou                           zhouhan@gmail.com
 Hao Zheng
 Hariprasad Govindharajan           hariprasad.govindharajan@intel.com
+Harold Huang                       baymaxhuang@gmail.com
 Harry Van Haaren                   harry.van.haaren@intel.com
 Helmut Schaa                       helmut.schaa@googlemail.com
 Henry Mai
@@ -221,6 +222,7 @@ Jian Li                            lijian@ooclab.com
 Jiang Lidong                       jianglidong3@jd.com
 Jianbo Liu                         jianbol@mellanox.com
 Jing Ai                            jinga@google.com
+Jinjun Gao                         gjinjun@gmail.com
 Jiri Benc                          jbenc@redhat.com
 Joe Perches                        joe@perches.com
 Joe Stringer                       joe@ovn.org
@@ -306,6 +308,7 @@ Mijo Safradin                      mijo@linux.vnet.ibm.com
 Mika Vaisanen                      mika.vaisanen@gmail.com
 Mike Pattrick                      mkp@redhat.com
 Minoru TAKAHASHI                   takahashi.minoru7@gmail.com
+Miro Tomaska                       mtomaska@redhat.com
 Mohammad Heib                      mheib@redhat.com
 Moshe Levi                         moshele@mellanox.com
 Murphy McCauley                    murphy.mccauley@gmail.com
@@ -371,6 +374,7 @@ RYAN D. MOATS                      rmoats@us.ibm.com
 Ryan Wilson
 Sairam Venugopal                   vsairam@vmware.com
 Sajjad Lateef
+Salem Sol                          salems@nvidia.com
 Saloni Jain                        saloni.jain@tcs.com
 Salvatore Daniele                  sdaniele@redhat.com
 Samuel Ghinet                      sghinet@cloudbasesolutions.com
@@ -408,6 +412,7 @@ Sugesh Chandran                    sugesh.chandran@intel.com
 SUGYO Kazushi                      sugyo.org@gmail.com
 Surya Rudra                        rudrasurya.r@altencalsoftlabs.com
 Tadaaki Nagao                      nagao@stratosphere.co.jp
+Tao Liu                            thomas.liu@ucloud.cn
 Tao YunXiang                       taoyunxiang@cmss.chinamobile.com
 Terry Wilson                       twilson@redhat.com
 Tetsuo NAKAGAWA                    nakagawa@mxc.nes.nec.co.jp

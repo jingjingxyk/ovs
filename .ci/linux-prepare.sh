@@ -26,7 +26,7 @@ cd ..
 #     https://github.com/pypa/pip/issues/10655
 pip3 install --disable-pip-version-check --user wheel
 pip3 install --disable-pip-version-check --user \
-    flake8 'hacking>=3.0' sphinx setuptools pyelftools
+    flake8 'hacking>=3.0' netaddr pyparsing sphinx setuptools pyelftools
 pip3 install --user  'meson==0.49.2'
 
 if [ "$M32" ]; then
@@ -41,6 +41,9 @@ if [ "$M32" ]; then
 
     sudo apt-get install -y $pkgs
 fi
+
+# Install python test dependencies
+pip3 install -r python/test_requirements.txt
 
 # IPv6 is supported by kernel but disabled in TravisCI images:
 #   https://github.com/travis-ci/travis-ci/issues/8891

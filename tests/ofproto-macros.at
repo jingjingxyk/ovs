@@ -153,10 +153,12 @@ m4_divert_pop([PREPARE_TESTS])
 
 m4_define([TESTABLE_LOG], [-vPATTERN:ANY:'%c|%p|%m'])
 
-# _OVS_VSWITCHD_START([vswitchd-aux-args])
+# _OVS_VSWITCHD_START([vswitchd-aux-args] [dbinit-aux-args])
 #
 # Creates an empty database and starts ovsdb-server.
 # Starts ovs-vswitchd, with additional arguments 'vswitchd-aux-args'.
+# 'dbinit-aux-args' are passed as additional commands to 'ovs-vsctl init'
+# before starting ovs-vswitchd.
 #
 m4_define([_OVS_VSWITCHD_START],
   [dnl Create database.
@@ -180,6 +182,7 @@ m4_define([_OVS_VSWITCHD_START],
    on_exit "kill_ovs_vswitchd `cat ovs-vswitchd.pid`"
    AT_CHECK([[sed < stderr '
 /ovs_numa|INFO|Discovered /d
+/odp_execute_impl|INFO|Action implementation /d
 /vlog|INFO|opened log file/d
 /vswitchd|INFO|ovs-vswitchd (Open vSwitch)/d
 /reconnect|INFO|/d
@@ -189,6 +192,7 @@ m4_define([_OVS_VSWITCHD_START],
 /ofproto|INFO|datapath ID changed to fedcba9876543210/d
 /dpdk|INFO|DPDK Disabled - Use other_config:dpdk-init to enable/d
 /netlink_socket|INFO|netlink: could not enable listening to all nsid/d
+/netdev_offload|INFO|netdev: Flow API Enabled/d
 /probe tc:/d
 /setting extended ack support failed/d
 /tc: Using policy/d']])

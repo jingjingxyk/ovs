@@ -21,7 +21,7 @@ AC_DEFUN([OVS_CHECK_COVERAGE],
   [AC_REQUIRE([AC_PROG_CC])
    AC_ARG_ENABLE(
      [coverage],
-     [AC_HELP_STRING([--enable-coverage],
+     [AS_HELP_STRING([--enable-coverage],
                      [Enable gcov coverage tool.])],
      [case "${enableval}" in
         (yes) coverage=true ;;
@@ -50,7 +50,7 @@ dnl Checks for --enable-ndebug and defines NDEBUG if it is specified.
 AC_DEFUN([OVS_CHECK_NDEBUG],
   [AC_ARG_ENABLE(
      [ndebug],
-     [AC_HELP_STRING([--enable-ndebug],
+     [AS_HELP_STRING([--enable-ndebug],
                      [Disable debugging features for max performance])],
      [case "${enableval}" in
         (yes) ndebug=true ;;
@@ -64,7 +64,7 @@ dnl Checks for --enable-usdt-probes and defines HAVE_USDT if it is specified.
 AC_DEFUN([OVS_CHECK_USDT], [
   AC_ARG_ENABLE(
     [usdt-probes],
-    [AC_HELP_STRING([--enable-usdt-probes],
+    [AS_HELP_STRING([--enable-usdt-probes],
                     [Enable User Statically Defined Tracing (USDT) probes])],
     [case "${enableval}" in
        (yes) usdt=true ;;
@@ -227,7 +227,7 @@ dnl Checks for libcap-ng.
 AC_DEFUN([OVS_CHECK_LIBCAPNG],
   [AC_ARG_ENABLE(
      [libcapng],
-     [AC_HELP_STRING([--disable-libcapng], [Disable Linux capability support])],
+     [AS_HELP_STRING([--disable-libcapng], [Disable Linux capability support])],
      [case "${enableval}" in
         (yes) libcapng=true ;;
         (no)  libcapng=false ;;
@@ -263,7 +263,7 @@ dnl Checks for OpenSSL.
 AC_DEFUN([OVS_CHECK_OPENSSL],
   [AC_ARG_ENABLE(
      [ssl],
-     [AC_HELP_STRING([--disable-ssl], [Disable OpenSSL support])],
+     [AS_HELP_STRING([--disable-ssl], [Disable OpenSSL support])],
      [case "${enableval}" in
         (yes) ssl=true ;;
         (no)  ssl=false ;;
@@ -320,7 +320,7 @@ dnl Checks for the directory in which to store the PKI.
 AC_DEFUN([OVS_CHECK_PKIDIR],
   [AC_ARG_WITH(
      [pkidir],
-     AC_HELP_STRING([--with-pkidir=DIR],
+     AS_HELP_STRING([--with-pkidir=DIR],
                     [PKI hierarchy directory [[LOCALSTATEDIR/lib/openvswitch/pki]]]),
      [PKIDIR=$withval],
      [PKIDIR='${localstatedir}/lib/openvswitch/pki'])
@@ -330,7 +330,7 @@ dnl Checks for the directory in which to store pidfiles.
 AC_DEFUN([OVS_CHECK_RUNDIR],
   [AC_ARG_WITH(
      [rundir],
-     AC_HELP_STRING([--with-rundir=DIR],
+     AS_HELP_STRING([--with-rundir=DIR],
                     [directory used for pidfiles
                     [[LOCALSTATEDIR/run/openvswitch]]]),
      [RUNDIR=$withval],
@@ -341,7 +341,7 @@ dnl Checks for the directory in which to store logs.
 AC_DEFUN([OVS_CHECK_LOGDIR],
   [AC_ARG_WITH(
      [logdir],
-     AC_HELP_STRING([--with-logdir=DIR],
+     AS_HELP_STRING([--with-logdir=DIR],
                     [directory used for logs [[LOCALSTATEDIR/log/PACKAGE]]]),
      [LOGDIR=$withval],
      [LOGDIR='${localstatedir}/log/${PACKAGE}'])
@@ -351,7 +351,7 @@ dnl Checks for the directory in which to store the Open vSwitch database.
 AC_DEFUN([OVS_CHECK_DBDIR],
   [AC_ARG_WITH(
      [dbdir],
-     AC_HELP_STRING([--with-dbdir=DIR],
+     AS_HELP_STRING([--with-dbdir=DIR],
                     [directory used for conf.db [[SYSCONFDIR/PACKAGE]]]),
      [DBDIR=$withval],
      [DBDIR='${sysconfdir}/${PACKAGE}'])
@@ -420,6 +420,35 @@ AC_DEFUN([OVS_CHECK_SPHINX],
      [SPHINXBUILD], [sphinx-build-3 sphinx-build-2 sphinx-build], [none])
    AC_ARG_VAR([SPHINXBUILD])
    AM_CONDITIONAL([HAVE_SPHINX], [test "$SPHINXBUILD" != none])])
+
+
+dnl Checks for compiler correctly emitting AVX512-VL vpermd instruction.
+dnl GCC5 says it exports AVX512-VL, but it doesn't implement "vpermd" instruction
+dnl resulting in compilation failures. To workaround this "reported vs actual"
+dnl mismatch, we compile a small snippet, and conditionally enable AVX512-VL.
+AC_DEFUN([OVS_CHECK_GCC_AVX512VL], [
+  AC_MSG_CHECKING([whether compiler correctly emits AVX512-VL])
+  AC_COMPILE_IFELSE(
+    [AC_LANG_PROGRAM([#include <immintrin.h>
+                     static void __attribute__((__target__("avx512vl")))
+                     check_permutexvar(void)
+                     {
+                         __m256i v_swap32a = _mm256_setr_epi32(0x0, 0x4, 0xF,
+                                                               0xF, 0xF, 0xF,
+                                                               0xF, 0xF);
+                         v_swap32a = _mm256_permutexvar_epi32(v_swap32a,
+                                                              v_swap32a);
+                     }],[])],
+    [AC_MSG_RESULT([yes])
+    ovs_cv_gcc_avx512vl_good=yes],
+    [AC_MSG_RESULT([no])
+    ovs_cv_gcc_avx512vl_good=no])
+   if test "$ovs_cv_gcc_avx512vl_good" = yes; then
+     AC_DEFINE([HAVE_GCC_AVX512VL_GOOD], [1],
+               [Define to 1 if gcc implements the vpermd instruction.])
+   fi
+   AM_CONDITIONAL([HAVE_GCC_AVX512VL_GOOD],
+                  [test "$ovs_cv_gcc_avx512vl_good" = yes])])
 
 dnl Checks for binutils/assembler known issue with AVX512.
 dnl Due to backports, we probe assembling a reproducer instead of checking

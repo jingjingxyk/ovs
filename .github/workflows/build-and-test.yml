@@ -6,27 +6,23 @@ jobs:
   build-linux:
     env:
       dependencies: |
-        automake libtool gcc bc libjemalloc1 libjemalloc-dev    \
+        automake libtool gcc bc libjemalloc2 libjemalloc-dev    \
         libssl-dev llvm-dev libelf-dev libnuma-dev libpcap-dev  \
         ninja-build selinux-policy-dev
-      deb_dependencies: |
-        linux-headers-$(uname -r) build-essential fakeroot devscripts equivs
       AFXDP:       ${{ matrix.afxdp }}
       ASAN:        ${{ matrix.asan }}
       UBSAN:       ${{ matrix.ubsan }}
       CC:          ${{ matrix.compiler }}
-      DEB_PACKAGE: ${{ matrix.deb_package }}
       DPDK:        ${{ matrix.dpdk }}
       DPDK_SHARED: ${{ matrix.dpdk_shared }}
       KERNEL:      ${{ matrix.kernel }}
-      KERNEL_LIST: ${{ matrix.kernel_list }}
       LIBS:        ${{ matrix.libs }}
       M32:         ${{ matrix.m32 }}
       OPTS:        ${{ matrix.opts }}
       TESTSUITE:   ${{ matrix.testsuite }}
 
     name: linux ${{ join(matrix.*, ' ') }}
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     timeout-minutes: 30
 
     strategy:
@@ -40,14 +36,11 @@ jobs:
 
           - compiler:     gcc
             testsuite:    test
-            kernel:       3.16
           - compiler:     clang
             testsuite:    test
-            kernel:       3.16
             asan:         asan
           - compiler:     clang
             testsuite:    test
-            kernel:       3.16
             ubsan:        ubsan
 
           - compiler:     gcc
@@ -70,16 +63,6 @@ jobs:
           - compiler:     clang
             testsuite:    test
             libs:         -ljemalloc
-
-          - compiler:     gcc
-            kernel_list:  5.8 5.5 5.4 4.19
-          - compiler:     clang
-            kernel_list:  5.8 5.5 5.4 4.19
-
-          - compiler:     gcc
-            kernel_list:  4.14 4.9 4.4 3.16
-          - compiler:     clang
-            kernel_list:  4.14 4.9 4.4 3.16
 
           - compiler:     gcc
             afxdp:        afxdp
@@ -110,9 +93,6 @@ jobs:
           - compiler:     gcc
             m32:          m32
             opts:         --disable-ssl
-
-          - compiler:     gcc
-            deb_package:  deb
 
     steps:
     - name: checkout
@@ -151,11 +131,7 @@ jobs:
     - name: update APT cache
       run:  sudo apt update || true
     - name: install common dependencies
-      if:   matrix.deb_package == ''
       run:  sudo apt install -y ${{ env.dependencies }}
-    - name: install dependencies for debian packages
-      if:   matrix.deb_package != ''
-      run:  sudo apt install -y ${{ env.deb_dependencies }}
     - name: install libunbound libunwind
       if:   matrix.m32 == ''
       run:  sudo apt install -y libunbound-dev libunwind-dev
@@ -165,13 +141,6 @@ jobs:
 
     - name: build
       run:  ./.ci/linux-build.sh
-
-    - name: upload deb packages
-      if:   matrix.deb_package != ''
-      uses: actions/upload-artifact@v2
-      with:
-        name: deb-packages
-        path: '/home/runner/work/ovs/*.deb'
 
     - name: copy logs on failure
       if: failure() || cancelled()
@@ -227,3 +196,50 @@ jobs:
       with:
         name: logs-osx-clang---disable-ssl
         path: config.log
+
+  build-linux-deb:
+    env:
+      deb_dependencies: |
+        linux-headers-$(uname -r) build-essential fakeroot devscripts equivs
+      DEB_PACKAGE: yes
+      DPDK:        ${{ matrix.dpdk }}
+
+    name: linux deb ${{ matrix.dpdk }} dpdk
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dpdk: no
+          - dpdk: shared
+
+    steps:
+    - name: checkout
+      uses: actions/checkout@v2
+
+    - name: update PATH
+      run:  |
+        echo "$HOME/bin"        >> $GITHUB_PATH
+        echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+    - name: update APT cache
+      run:  sudo apt update || true
+    - name: install dependencies for debian packages
+      run:  sudo apt install -y ${{ env.deb_dependencies }}
+    - name: install dpdk-dev
+      if:   matrix.dpdk != 'no'
+      run:  sudo apt install -y libdpdk-dev
+
+    - name: prepare
+      run:  ./.ci/linux-prepare.sh
+
+    - name: build
+      run:  ./.ci/linux-build.sh
+
+    - name: upload deb packages
+      uses: actions/upload-artifact@v2
+      with:
+        name: deb-packages-${{ matrix.dpdk }}-dpdk
+        path: '/home/runner/work/ovs/*.deb'

@@ -490,6 +490,43 @@
         </p>
       </column>
 
+      <column name="other_config" key="shared-mempool-config">
+              <p>Specifies dpdk shared mempool config.</p>
+              <p>Value should be set in the following form:</p>
+              <p>
+                <code>other_config:shared-mempool-config=&lt;
+                  user-shared-mempool-mtu-list&gt;</code>
+              </p>
+              <p>where</p>
+              <p>
+                <ul>
+                  <li>
+                    &lt;user-shared-mempool-mtu-list&gt; ::=
+                    NULL | &lt;non-empty-list&gt;
+                  </li>
+                  <li>
+                    &lt;non-empty-list&gt; ::= &lt;user-mtus&gt; |
+                                               &lt;user-mtus&gt; ,
+                                               &lt;non-empty-list&gt;
+                  </li>
+                  <li>
+                    &lt;user-mtus&gt; ::= &lt;mtu-all-socket&gt; |
+                                          &lt;mtu-socket-pair&gt;
+                  </li>
+                  <li>
+                    &lt;mtu-all-socket&gt; ::= &lt;mtu&gt;
+                  </li>
+                  <li>
+                    &lt;mtu-socket-pair&gt; ::= &lt;mtu&gt; : &lt;socket-id&gt;
+                  </li>
+                </ul>
+              </p>
+        <p>
+          Changing this value requires restarting the daemon if dpdk-init has
+          already been set to true.
+        </p>
+      </column>
+
       <column name="other_config" key="tx-flush-interval"
               type='{"type": "integer",
                      "minInteger": 0, "maxInteger": 1000000}'>
@@ -723,7 +760,7 @@
          iterations.
         </p>
         <p>
-         The defaul value is 1 min. If configured to 0 then it would be
+         The default value is 1 min. If configured to 0 then it would be
          converted to default value i.e. 1 min
         </p>
         <p>
@@ -2083,6 +2120,20 @@
         to <code>active-backup</code> (e.g., LACP negotiation fails and
         <ref column="other_config" key="lacp-fallback-ab"/> is
         <code>true</code>).
+      </column>
+
+      <column name="other_config" key="all-members-active"
+              type='{"type": "boolean"}'>
+        <p>
+          Enable/Disable delivery of broadcast/multicast packets on secondary
+          interface of a balance-slb bond.  Relevant only when
+          <ref column="lacp"/> is <code>off</code>.
+        </p>
+        <p>
+          This parameter is identical to <code>all_slaves_active</code> for
+          Linux kernel bonds.  Disabled by default as it is not a desirable
+          configuration for most users.
+        </p>
       </column>
 
       <group title="Link Failure Detection">
@@ -6041,7 +6092,7 @@ ovs-vsctl add-port br0 p0 -- set Interface p0 type=patch options:peer=p1 \
         <code>recirc</code> actions with new action <code>lb_output</code>
         and avoids recirculation of packet in datapath. It is supported
         only for balance-tcp bond mode in netdev datapath. The new action
-        gives higer performance by using bond buckets instead of post
+        gives higher performance by using bond buckets instead of post
         recirculation flows for selection of slave port from bond. By default
         this new action is disabled, however it can be enabled by setting
         <ref column="other-config" key="lb-output-action"/> in

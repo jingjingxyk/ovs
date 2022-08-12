@@ -13,8 +13,8 @@
 # limitations under the License.
 
 AC_PREREQ(2.63)
-AC_INIT(openvswitch, 2.17.90, bugs@openvswitch.org)
-AC_CONFIG_SRCDIR([datapath/datapath.c])
+AC_INIT(openvswitch, 3.0.90, bugs@openvswitch.org)
+AC_CONFIG_SRCDIR([vswitchd/ovs-vswitchd.c])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_HEADERS([config.h])
@@ -184,6 +184,7 @@ OVS_CONDITIONAL_CC_OPTION([-Wno-unused-parameter], [HAVE_WNO_UNUSED_PARAMETER])
 OVS_ENABLE_WERROR_TOP
 OVS_ENABLE_SPARSE
 OVS_CTAGS_IDENTIFIERS
+OVS_CHECK_ACTIONS_AUTOVALIDATOR
 OVS_CHECK_DPCLS_AUTOVALIDATOR
 OVS_CHECK_DPIF_AVX512_DEFAULT
 OVS_CHECK_MFEX_AUTOVALIDATOR
@@ -203,10 +204,6 @@ AC_SUBST([OVS_CFLAGS])
 AC_SUBST([OVS_LDFLAGS])
 
 AC_CONFIG_FILES(Makefile)
-AC_CONFIG_FILES(datapath/Makefile)
-AC_CONFIG_FILES(datapath/linux/Kbuild)
-AC_CONFIG_FILES(datapath/linux/Makefile)
-AC_CONFIG_FILES(datapath/linux/Makefile.main)
 AC_CONFIG_FILES(tests/atlocal)
 AC_CONFIG_FILES(lib/libopenvswitch.pc)
 AC_CONFIG_FILES(lib/libsflow.pc)

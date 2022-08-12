@@ -1,5 +1,9 @@
-Post-v2.17.0
----------------------
+Post-v3.0.0
+--------------------
+
+
+v3.0.0 - xx xxx xxxx
+--------------------
    - libopenvswitch API change:
      * To fix the Undefined Behavior issue causing the compiler to incorrectly
        optimize important parts of code, container iteration macros (e.g.,
@@ -24,6 +28,8 @@ Post-v2.17.0
      * Returning unused memory to the OS after the database compaction is now
        enabled by default.  Use 'ovsdb-server/memory-trim-on-compaction off'
        unixctl command to disable.
+     * Most of the work for the automatic database compaction in clustered
+       mode has been moved to a separate thread to avoid blocking the process.
    - OVSDB-IDL:
      * New monitor mode flag, OVSDB_IDL_WRITE_CHANGED_ONLY, allowing
        applications to relax atomicity requirements when dealing with
@@ -33,6 +39,9 @@ Post-v2.17.0
          OpenFlow versions 1.0-1.2 with Nicira Extensions
          OpenFlow versions 1.3 with Open Network Foundation extension
          OpenFlow versions 1.4+, as defined in the OpenFlow specification
+   - Python:
+     * Added a new flow parsing library ovs.flow capable of parsing
+       both OpenFlow and datapath flows.
    - IPsec:
      * Added support for custom per-tunnel options via 'options:ipsec_*' knobs.
        See Documentation/tutorials/ipsec.rst for details.
@@ -45,12 +54,38 @@ Post-v2.17.0
      * Delay creating or reusing a mempool for vhost ports until the VM
        is started. A failure to create a mempool will now be logged only
        when the VM is started.
+     * New configuration knob 'other_config:shared-mempool-config' to set MTU
+       that shared mempool mbuf size is based on. This allows interfaces with
+       different MTU sizes to share mempools.
    - Userspace datapath:
+     * Improved multi-thread scalability of the userspace connection tracking.
      * 'dpif-netdev/subtable-lookup-prio-get' appctl command renamed to
        'dpif-netdev/subtable-lookup-info-get' to better reflect its purpose.
        The old variant is kept for backward compatibility.
-   - Linux datapath:
-     * Add offloading meter tc police.
+     * Add actions auto-validator function to compare different actions
+       implementations against default implementation.
+     * Add command line option to switch between different actions
+       implementations available at run time.
+     * Add build time configure command to enable auto-validator as default
+       actions implementation at build time.
+     * Add AVX512 implementation of actions.
+   - Debian packaging updated to be on par with package source in Debian/Ubuntu.
+     * Provided an openvswitch-switch-dpdk package that integrates with the
+       dpdk package in the distributions so that end users can opt into a
+       DPDK-enabled Open vSwitch binary.
+     * Provided systemd service files.
+     * Provided openvswitch-source package for reproducible integrated build of
+       for example OVN.
+     * Shared library and subsequently libopenvswitch and libopenvswitch-dev
+       binary packages are no longer built.
+   - Linux TC offload:
+     * Add support for offloading meters via tc police.
+     * Add support for offloading the check_pkt_len action.
+   - New configuration knob 'other_config:all-members-active' for
+     balance-slb bonds.
+   - Previously deprecated Linux kernel module is now fully removed from
+     the OVS source tree.  The version provided with the Linux kernel
+     should be used instead.
 
 
 v2.17.0 - 17 Feb 2022

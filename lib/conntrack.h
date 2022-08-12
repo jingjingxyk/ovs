@@ -108,12 +108,12 @@ struct conntrack_dump {
 struct conntrack_zone_limit {
     int32_t zone;
     uint32_t limit;
-    uint32_t count;
+    atomic_count count;
     uint32_t zone_limit_seq; /* Used to disambiguate zone limit counts. */
 };
 
 struct timeout_policy {
-    struct hmap_node node;
+    struct cmap_node node;
     struct ct_dpif_timeout_policy policy;
 };
 

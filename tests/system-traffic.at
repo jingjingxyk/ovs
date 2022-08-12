@@ -194,7 +194,7 @@ AT_CLEANUP
 
 AT_SETUP([datapath - ping6 between two ports IPv6 later fragments])
 OVS_TRAFFIC_VSWITCHD_START()
-OVS_CHECK_MIN_KERNEL(5, 19)
+CHECK_LATER_IPV6_FRAGMENTS()
 
 AT_CHECK([ovs-ofctl add-flow br0 "priority=1,actions=normal"])
 AT_CHECK([ovs-ofctl add-flow br0 "priority=2,tcp6,actions=drop"])
@@ -222,6 +222,46 @@ NS_CHECK_EXEC([at_ns0], [ping6 -s 3200 -q -c 3 -i 0.3 -w 2 fc00::2 | FORMAT_PING
 NS_CHECK_EXEC([at_ns0], [ovs-appctl dpctl/dump-flows -m --names > stdout.txt])
 NS_CHECK_EXEC([at_ns0], [grep ipv6 stdout.txt | grep frag=later | grep -q proto=44], [0], [])
 NS_CHECK_EXEC([at_ns0], [grep ipv6 stdout.txt | grep frag=later | grep -v -q proto=44], [1], [])
+
+OVS_TRAFFIC_VSWITCHD_STOP
+AT_CLEANUP
+
+AT_SETUP([datapath - ping6 between two ports with header modify])
+OVS_TRAFFIC_VSWITCHD_START()
+CHECK_LATER_IPV6_FRAGMENTS()
+
+AT_CHECK([ovs-ofctl add-flow br0 "actions=normal"])
+
+ADD_NAMESPACES(at_ns0, at_ns1)
+
+ADD_VETH(p0, at_ns0, br0, "fc00::1/96", e4:11:22:33:44:55)
+ADD_VETH(p1, at_ns1, br0, "fc00::2/96", e4:11:22:33:44:54)
+NS_CHECK_EXEC([at_ns0], [ip -6 neigh add fc00::3 lladdr e4:11:22:33:44:54 dev p0])
+
+dnl Linux seems to take a little time to get its IPv6 stack in order. Without
+dnl waiting, we get occasional failures due to the following error:
+dnl "connect: Cannot assign requested address"
+OVS_WAIT_UNTIL([ip netns exec at_ns0 ping6 -c 1 fc00::2])
+OVS_WAIT_UNTIL([ip netns exec at_ns1 ping6 -c 1 fc00::1])
+
+AT_DATA([flows.txt], [dnl
+priority=100,in_port=ovs-p0,ipv6,ipv6_src=fc00::1,ipv6_dst=fc00::3,actions=set_field:fc00::2->ipv6_dst,ovs-p1
+priority=100,in_port=ovs-p1,ipv6,ipv6_src=fc00::2,ipv6_dst=fc00::1,actions=set_field:fc00::3->ipv6_src,ovs-p0
+priority=0,actions=NORMAL
+])
+
+AT_CHECK([ovs-ofctl del-flows br0])
+AT_CHECK([ovs-ofctl add-flows br0 flows.txt])
+
+NS_CHECK_EXEC([at_ns0], [ping6 -q -c 3 -i 0.3 -w 2 fc00::3 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([at_ns0], [ping6 -s 1600 -q -c 3 -i 0.3 -w 2 fc00::3 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
+NS_CHECK_EXEC([at_ns0], [ping6 -s 3200 -q -c 3 -i 0.3 -w 2 fc00::3 | FORMAT_PING], [0], [dnl
+3 packets transmitted, 3 received, 0% packet loss, time 0ms
+])
 
 OVS_TRAFFIC_VSWITCHD_STOP
 AT_CLEANUP
@@ -758,7 +798,7 @@ NS_CHECK_EXEC([at_ns0], [ping -q -c 3 10.1.1.100 | FORMAT_PING], [0], [dnl
 ])
 
 dnl Test OVS handles TLV map modifictions properly when restores frozen state.
-NS_CHECK_EXEC([at_ns0], [ping 10.1.1.100 > /dev/null &])
+NETNS_DAEMONIZE([at_ns0], [ping 10.1.1.100 > /dev/null], [ping0.pid])
 
 AT_CHECK([ovs-ofctl add-tlv-map br0 "{class=0xffff,type=0x88,len=4}->tun_metadata1"])
 sleep 1
@@ -1102,9 +1142,9 @@ NS_CHECK_EXEC([at_ns0], [ping -q -c 3 -i 0.3 -w 2 10.1.1.2 | FORMAT_PING], [0], 
 OVS_APP_EXIT_AND_WAIT([ovs-ofctl])
 
 AT_CHECK([cat ofctl_monitor.log | STRIP_MONITOR_CSUM], [0], [dnl
-icmp,vlan_tci=0x0000,dl_src=ae:c6:7e:54:8d:4d,dl_dst=50:54:00:00:00:0b,nw_src=10.1.1.2,nw_dst=192.168.4.4,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=0,icmp_code=0 icmp_csum: <skip>
-icmp,vlan_tci=0x0000,dl_src=ae:c6:7e:54:8d:4d,dl_dst=50:54:00:00:00:0b,nw_src=10.1.1.2,nw_dst=192.168.4.4,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=0,icmp_code=0 icmp_csum: <skip>
-icmp,vlan_tci=0x0000,dl_src=ae:c6:7e:54:8d:4d,dl_dst=50:54:00:00:00:0b,nw_src=10.1.1.2,nw_dst=192.168.4.4,nw_tos=0,nw_ecn=0,nw_ttl=64,icmp_type=0,icmp_code=0 icmp_csum: <skip>
+icmp,vlan_tci=0x0000,dl_src=ae:c6:7e:54:8d:4d,dl_dst=50:54:00:00:00:0b,nw_src=10.1.1.2,nw_dst=192.168.4.4,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=0,icmp_code=0 icmp_csum: <skip>
+icmp,vlan_tci=0x0000,dl_src=ae:c6:7e:54:8d:4d,dl_dst=50:54:00:00:00:0b,nw_src=10.1.1.2,nw_dst=192.168.4.4,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=0,icmp_code=0 icmp_csum: <skip>
+icmp,vlan_tci=0x0000,dl_src=ae:c6:7e:54:8d:4d,dl_dst=50:54:00:00:00:0b,nw_src=10.1.1.2,nw_dst=192.168.4.4,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=0,icmp_code=0 icmp_csum: <skip>
 ])
 
 OVS_TRAFFIC_VSWITCHD_STOP
@@ -2083,9 +2123,9 @@ OVS_APP_EXIT_AND_WAIT([ovs-ofctl])
 dnl Check this output. We only see the latter two packets, not the first.
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
 NXT_PACKET_IN2 (xid=0x0): total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.1,nw_dst=10.1.1.2,nw_tos=0,nw_ecn=0,nw_ttl=0,tp_src=1,tp_dst=2 udp_csum:0
+udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.1,nw_dst=10.1.1.2,nw_tos=0,nw_ecn=0,nw_ttl=0,nw_frag=no,tp_src=1,tp_dst=2 udp_csum:0
 NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 ct_state=est|rpl|trk,ct_nw_src=10.1.1.1,ct_nw_dst=10.1.1.2,ct_nw_proto=17,ct_tp_src=1,ct_tp_dst=2,ip,in_port=2 (via action) data_len=42 (unbuffered)
-udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.2,nw_dst=10.1.1.1,nw_tos=0,nw_ecn=0,nw_ttl=0,tp_src=2,tp_dst=1 udp_csum:0
+udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.2,nw_dst=10.1.1.1,nw_tos=0,nw_ecn=0,nw_ttl=0,nw_frag=no,tp_src=2,tp_dst=1 udp_csum:0
 ])
 
 OVS_TRAFFIC_VSWITCHD_STOP
@@ -2131,9 +2171,9 @@ OVS_APP_EXIT_AND_WAIT([ovs-ofctl])
 dnl Check this output. We only see the latter two packets, not the first.
 AT_CHECK([cat ofctl_monitor.log], [0], [dnl
 NXT_PACKET_IN2 (xid=0x0): cookie=0x0 total_len=42 in_port=1 (via action) data_len=42 (unbuffered)
-udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.1,nw_dst=10.1.1.2,nw_tos=0,nw_ecn=0,nw_ttl=0,tp_src=1,tp_dst=2 udp_csum:0
+udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.1,nw_dst=10.1.1.2,nw_tos=0,nw_ecn=0,nw_ttl=0,nw_frag=no,tp_src=1,tp_dst=2 udp_csum:0
 NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=42 ct_state=new|trk,ct_nw_src=10.1.1.2,ct_nw_dst=10.1.1.1,ct_nw_proto=17,ct_tp_src=2,ct_tp_dst=1,ip,in_port=2 (via action) data_len=42 (unbuffered)
-udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.2,nw_dst=10.1.1.1,nw_tos=0,nw_ecn=0,nw_ttl=0,tp_src=2,tp_dst=1 udp_csum:0
+udp,vlan_tci=0x0000,dl_src=50:54:00:00:00:09,dl_dst=50:54:00:00:00:0a,nw_src=10.1.1.2,nw_dst=10.1.1.1,nw_tos=0,nw_ecn=0,nw_ttl=0,nw_frag=no,tp_src=2,tp_dst=1 udp_csum:0
 ])
 
 dnl
@@ -3078,6 +3118,15 @@ NXST_FLOW reply:
  table=1, priority=100,ct_state=+est+trk,in_port=1 actions=output:2
 ])
 
+dnl Send a 3rd UDP packet on port 1
+AT_CHECK([ovs-ofctl -O OpenFlow13 packet-out br0 "in_port=1 packet=50540000000a50540000000908004500001c000000000011a4cd0a0101010a0101020001000200080000 actions=resubmit(,0)"])
+
+dnl There still should not be any packet that matches the established ct_state.
+AT_CHECK([ovs-ofctl dump-flows br0 "table=1 in_port=1,ct_state=+trk+est" | ofctl_strip], [0], [dnl
+NXST_FLOW reply:
+ table=1, priority=100,ct_state=+est+trk,in_port=1 actions=output:2
+])
+
 OVS_TRAFFIC_VSWITCHD_STOP
 AT_CLEANUP
 
@@ -3238,11 +3287,11 @@ OVS_APP_EXIT_AND_WAIT([ovs-ofctl])
 dnl Check this output. We only see the latter two packets, not the first.
 AT_CHECK([cat ofctl_monitor.log | grep -v ff02 | grep -v fe80 | grep -v no_match], [0], [dnl
 NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=75 ct_state=inv|trk,ip,in_port=2 (via action) data_len=75 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=c6:f5:4e:cb:72:db,dl_dst=f6:4c:47:35:28:c9,nw_src=172.16.0.4,nw_dst=172.16.0.3,nw_tos=192,nw_ecn=0,nw_ttl=64,icmp_type=3,icmp_code=3 icmp_csum:da49
+icmp,vlan_tci=0x0000,dl_src=c6:f5:4e:cb:72:db,dl_dst=f6:4c:47:35:28:c9,nw_src=172.16.0.4,nw_dst=172.16.0.3,nw_tos=192,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=3,icmp_code=3 icmp_csum:da49
 NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=47 ct_state=new|trk,ct_nw_src=172.16.0.1,ct_nw_dst=172.16.0.2,ct_nw_proto=17,ct_tp_src=41614,ct_tp_dst=5555,ip,in_port=1 (via action) data_len=47 (unbuffered)
-udp,vlan_tci=0x0000,dl_src=e6:4c:47:35:28:c9,dl_dst=c6:f9:4e:cb:72:db,nw_src=172.16.0.1,nw_dst=172.16.0.2,nw_tos=0,nw_ecn=0,nw_ttl=64,tp_src=41614,tp_dst=5555 udp_csum:2096
+udp,vlan_tci=0x0000,dl_src=e6:4c:47:35:28:c9,dl_dst=c6:f9:4e:cb:72:db,nw_src=172.16.0.1,nw_dst=172.16.0.2,nw_tos=0,nw_ecn=0,nw_ttl=64,nw_frag=no,tp_src=41614,tp_dst=5555 udp_csum:2096
 NXT_PACKET_IN2 (xid=0x0): table_id=1 cookie=0x0 total_len=75 ct_state=rel|rpl|trk,ct_nw_src=172.16.0.1,ct_nw_dst=172.16.0.2,ct_nw_proto=17,ct_tp_src=41614,ct_tp_dst=5555,ip,in_port=2 (via action) data_len=75 (unbuffered)
-icmp,vlan_tci=0x0000,dl_src=c6:f9:4e:cb:72:db,dl_dst=e6:4c:47:35:28:c9,nw_src=172.16.0.3,nw_dst=172.16.0.1,nw_tos=192,nw_ecn=0,nw_ttl=64,icmp_type=3,icmp_code=3 icmp_csum:553f
+icmp,vlan_tci=0x0000,dl_src=c6:f9:4e:cb:72:db,dl_dst=e6:4c:47:35:28:c9,nw_src=172.16.0.3,nw_dst=172.16.0.1,nw_tos=192,nw_ecn=0,nw_ttl=64,nw_frag=no,icmp_type=3,icmp_code=3 icmp_csum:553f
 ])
 
 AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(172.16.0.1)], [0], [dnl
@@ -3442,6 +3491,11 @@ AT_CHECK([ovs-ofctl bundle br0 bundle.txt])
 
 AT_CHECK([ovs-appctl dpctl/dump-conntrack | FORMAT_CT(10.1.1.2)], [0], [dnl
 ])
+
+dnl Send the second fragment in order to avoid keeping the first fragment
+dnl in the queue until the expiration occurs. Fragments already queued, if resent,
+dnl may lead to failures on the kernel datapath.
+AT_CHECK([ovs-ofctl -O OpenFlow13 packet-out br0 "in_port=1, packet=50540000000a505400000009080045000030000100320011a4860a0101010a01010200010002000800000010203040506070809000010203040506070809, actions=ct(commit)"])
 
 OVS_TRAFFIC_VSWITCHD_STOP
 AT_CLEANUP

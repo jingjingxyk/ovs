@@ -10,11 +10,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import sys
 
-from distutils.command.build_ext import build_ext
-from distutils.errors import CCompilerError, DistutilsExecError, \
-    DistutilsPlatformError
+from setuptools.command.build_ext import build_ext
+try:
+    from setuptools.errors import CCompilerError, ExecError, PlatformError
+except ImportError:  # Needed for setuptools < 59.0
+    from distutils.errors import CCompilerError
+    from distutils.errors import DistutilsExecError as ExecError
+    from distutils.errors import DistutilsPlatformError as PlatformError
 
 import setuptools
 
@@ -37,7 +42,7 @@ except IOError:
           file=sys.stderr)
     sys.exit(-1)
 
-ext_errors = (CCompilerError, DistutilsExecError, DistutilsPlatformError)
+ext_errors = (CCompilerError, ExecError, PlatformError)
 if sys.platform == 'win32':
     ext_errors += (IOError, ValueError)
 
@@ -53,7 +58,7 @@ class try_build_ext(build_ext):
     def run(self):
         try:
             build_ext.run(self)
-        except DistutilsPlatformError:
+        except PlatformError:
             raise BuildFailed()
 
     def build_extension(self, ext):
@@ -61,6 +66,19 @@ class try_build_ext(build_ext):
             build_ext.build_extension(self, ext)
         except ext_errors:
             raise BuildFailed()
+
+
+# Allow caller of setup.py to pass in libopenvswitch.a as an object for linking
+# plus all the dependencies through the use of 'extra_cflags' and 'extra_libs'
+# environment variables when not building a shared openvswitch library.
+
+if os.environ.get('enable_shared', '') == 'no':
+    libraries = []
+else:
+    libraries = ['openvswitch']
+
+extra_cflags = os.environ.get('extra_cflags', '').split()
+extra_libs = os.environ.get('extra_libs', '').split()
 
 
 setup_args = dict(
@@ -71,7 +89,7 @@ setup_args = dict(
     author='Open vSwitch',
     author_email='dev@openvswitch.org',
     packages=['ovs', 'ovs.compat', 'ovs.compat.sortedcontainers',
-              'ovs.db', 'ovs.unixctl'],
+              'ovs.db', 'ovs.unixctl', 'ovs.flow'],
     keywords=['openvswitch', 'ovs', 'OVSDB'],
     license='Apache 2.0',
     classifiers=[
@@ -84,11 +102,15 @@ setup_args = dict(
         'Programming Language :: Python :: 3.4',
         'Programming Language :: Python :: 3.5',
     ],
-    ext_modules=[setuptools.Extension("ovs._json", sources=["ovs/_json.c"],
-                                      libraries=['openvswitch'])],
+    ext_modules=[setuptools.Extension("ovs._json",
+                                      sources=["ovs/_json.c"],
+                                      libraries=libraries,
+                                      extra_compile_args=extra_cflags,
+                                      extra_link_args=extra_libs)],
     cmdclass={'build_ext': try_build_ext},
     install_requires=['sortedcontainers'],
-    extras_require={':sys_platform == "win32"': ['pywin32 >= 1.0']},
+    extras_require={':sys_platform == "win32"': ['pywin32 >= 1.0'],
+                    'flow': ['netaddr', 'pyparsing']},
 )
 
 try:
@@ -102,6 +124,6 @@ except BuildFailed:
     print("Retrying the build without the C extension.")
     print("*" * 75)
 
-    del(setup_args['cmdclass'])
-    del(setup_args['ext_modules'])
+    del setup_args['cmdclass']
+    del setup_args['ext_modules']
     setuptools.setup(**setup_args)
