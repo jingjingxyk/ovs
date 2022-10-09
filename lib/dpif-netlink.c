@@ -801,14 +801,28 @@ dpif_netlink_set_handler_pids(struct dpif *dpif_, const uint32_t *upcall_pids,
                               uint32_t n_upcall_pids)
 {
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
+    int largest_cpu_id = ovs_numa_get_largest_core_id();
     struct dpif_netlink_dp request, reply;
     struct ofpbuf *bufp;
-    int error;
-    int n_cores;
 
-    n_cores = count_cpu_cores();
-    ovs_assert(n_cores == n_upcall_pids);
-    VLOG_DBG("Dispatch mode(per-cpu): Number of CPUs is %d", n_cores);
+    uint32_t *corrected;
+    int error, i, n_cores;
+
+    if (largest_cpu_id == OVS_NUMA_UNSPEC) {
+        largest_cpu_id = -1;
+    }
+
+    /* Some systems have non-continuous cpu core ids.  count_total_cores()
+     * would return an accurate number, however, this number cannot be used.
+     * e.g. If the largest core_id of a system is cpu9, but the system only
+     * has 4 cpus then the OVS kernel module would throw a "CPU mismatch"
+     * warning.  With the MAX() in place in this example we send an array of
+     * size 10 and prevent the warning.  This has no bearing on the number of
+     * threads created.
+     */
+    n_cores = MAX(count_total_cores(), largest_cpu_id + 1);
+    VLOG_DBG("Dispatch mode(per-cpu): Setting up handler PIDs for %d cores",
+             n_cores);
 
     dpif_netlink_dp_init(&request);
     request.cmd = OVS_DP_CMD_SET;
@@ -817,7 +831,12 @@ dpif_netlink_set_handler_pids(struct dpif *dpif_, const uint32_t *upcall_pids,
     request.user_features = dpif->user_features |
                             OVS_DP_F_DISPATCH_UPCALL_PER_CPU;
 
-    request.upcall_pids = upcall_pids;
+    corrected = xcalloc(n_cores, sizeof *corrected);
+
+    for (i = 0; i < n_cores; i++) {
+        corrected[i] = upcall_pids[i % n_upcall_pids];
+    }
+    request.upcall_pids = corrected;
     request.n_upcall_pids = n_cores;
 
     error = dpif_netlink_dp_transact(&request, &reply, &bufp);
@@ -825,9 +844,10 @@ dpif_netlink_set_handler_pids(struct dpif *dpif_, const uint32_t *upcall_pids,
         dpif->user_features = reply.user_features;
         ofpbuf_delete(bufp);
         if (!dpif_netlink_upcall_per_cpu(dpif)) {
-            return -EOPNOTSUPP;
+            error = -EOPNOTSUPP;
         }
     }
+    free(corrected);
     return error;
 }
 
@@ -2237,8 +2257,6 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
     size_t left;
     struct netdev *dev;
     struct offload_info info;
-    ovs_be16 dst_port = 0;
-    uint8_t csum_on = false;
     int err;
 
     info.tc_modify_flow_deleted = false;
@@ -2258,10 +2276,9 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
         return EOPNOTSUPP;
     }
 
-    /* Get tunnel dst port */
+    /* Check the output port for a tunnel. */
     NL_ATTR_FOR_EACH(nla, left, put->actions, put->actions_len) {
         if (nl_attr_type(nla) == OVS_ACTION_ATTR_OUTPUT) {
-            const struct netdev_tunnel_config *tnl_cfg;
             struct netdev *outdev;
             odp_port_t out_port;
 
@@ -2271,19 +2288,10 @@ parse_flow_put(struct dpif_netlink *dpif, struct dpif_flow_put *put)
                 err = EOPNOTSUPP;
                 goto out;
             }
-            tnl_cfg = netdev_get_tunnel_config(outdev);
-            if (tnl_cfg && tnl_cfg->dst_port != 0) {
-                dst_port = tnl_cfg->dst_port;
-            }
-            if (tnl_cfg) {
-                csum_on = tnl_cfg->csum;
-            }
             netdev_close(outdev);
         }
     }
 
-    info.tp_dst_port = dst_port;
-    info.tunnel_csum_on = csum_on;
     info.recirc_id_shared_with_tc = (dpif->user_features
                                      & OVS_DP_F_TC_RECIRC_SHARING);
     err = netdev_flow_put(dev, &match,
@@ -2506,6 +2514,77 @@ dpif_netlink_handler_uninit(struct dpif_handler *handler)
 }
 #endif
 
+/* Returns true if num is a prime number,
+ * otherwise, return false.
+ */
+static bool
+is_prime(uint32_t num)
+{
+    if (num == 2) {
+        return true;
+    }
+
+    if (num < 2) {
+        return false;
+    }
+
+    if (num % 2 == 0) {
+        return false;
+    }
+
+    for (uint64_t i = 3; i * i <= num; i += 2) {
+        if (num % i == 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* Returns start if start is a prime number.  Otherwise returns the next
+ * prime greater than start.  Search is limited by UINT32_MAX.
+ *
+ * Returns 0 if no prime has been found between start and UINT32_MAX.
+ */
+static uint32_t
+next_prime(uint32_t start)
+{
+    if (start <= 2) {
+        return 2;
+    }
+
+    for (uint32_t i = start; i < UINT32_MAX; i++) {
+        if (is_prime(i)) {
+            return i;
+        }
+    }
+
+    return 0;
+}
+
+/* Calculates and returns the number of handler threads needed based
+ * the following formula:
+ *
+ * handlers_n = min(next_prime(active_cores + 1), total_cores)
+ */
+static uint32_t
+dpif_netlink_calculate_n_handlers(void)
+{
+    uint32_t total_cores = count_total_cores();
+    uint32_t n_handlers = count_cpu_cores();
+    uint32_t next_prime_num;
+
+    /* If not all cores are available to OVS, create additional handler
+     * threads to ensure more fair distribution of load between them.
+     */
+    if (n_handlers < total_cores && total_cores > 2) {
+        next_prime_num = next_prime(n_handlers + 1);
+        n_handlers = MIN(next_prime_num, total_cores);
+    }
+
+    return n_handlers;
+}
+
 static int
 dpif_netlink_refresh_handlers_cpu_dispatch(struct dpif_netlink *dpif)
     OVS_REQ_WRLOCK(dpif->upcall_lock)
@@ -2515,7 +2594,7 @@ dpif_netlink_refresh_handlers_cpu_dispatch(struct dpif_netlink *dpif)
     uint32_t n_handlers;
     uint32_t *upcall_pids;
 
-    n_handlers = count_cpu_cores();
+    n_handlers = dpif_netlink_calculate_n_handlers();
     if (dpif->n_handlers != n_handlers) {
         VLOG_DBG("Dispatch mode(per-cpu): initializing %d handlers",
                    n_handlers);
@@ -2755,7 +2834,7 @@ dpif_netlink_number_handlers_required(struct dpif *dpif_, uint32_t *n_handlers)
     struct dpif_netlink *dpif = dpif_netlink_cast(dpif_);
 
     if (dpif_netlink_upcall_per_cpu(dpif)) {
-        *n_handlers = count_cpu_cores();
+        *n_handlers = dpif_netlink_calculate_n_handlers();
         return true;
     }
 

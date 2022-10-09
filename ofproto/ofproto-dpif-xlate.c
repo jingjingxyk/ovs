@@ -813,9 +813,20 @@ xlate_report_table(const struct xlate_ctx *ctx, struct rule_dpif *rule,
         ds_put_cstr(&s, "Packets are IP fragments and "
                     "the fragment handling mode is \"drop\".");
     } else {
+        struct ofputil_port_map map = OFPUTIL_PORT_MAP_INITIALIZER(&map);
+
+        if (ctx->xin->names) {
+            struct ofproto_dpif *ofprotop;
+            ofprotop = ofproto_dpif_lookup_by_name(ctx->xbridge->name);
+            ofproto_append_ports_to_map(&map, ofprotop->up.ports);
+        }
+
         minimatch_format(&rule->up.cr.match,
                          ofproto_get_tun_tab(&ctx->xin->ofproto->up),
-                         NULL, &s, OFP_DEFAULT_PRIORITY);
+                         &map, &s, OFP_DEFAULT_PRIORITY);
+
+        ofputil_port_map_destroy(&map);
+
         if (ds_last(&s) != ' ') {
             ds_put_cstr(&s, ", ");
         }
@@ -1515,7 +1526,7 @@ xlate_lookup_ofproto_(const struct dpif_backer *backer,
         if (OVS_UNLIKELY(!recirc_id_node)) {
             if (errorp) {
                 *errorp = xasprintf("no recirculation data for recirc_id "
-                                    "%"PRIu32, flow->recirc_id);
+                                    "%#"PRIx32, flow->recirc_id);
             }
             return NULL;
         }
@@ -1556,8 +1567,8 @@ xlate_lookup_ofproto_(const struct dpif_backer *backer,
         if (errorp) {
             *errorp = (tnl_port_should_receive(flow)
                        ? xstrdup("no OpenFlow tunnel port for this packet")
-                       : xasprintf("no OpenFlow tunnel port for datapath "
-                                   "port %"PRIu32, flow->in_port.odp_port));
+                       : xasprintf("no OpenFlow port for datapath port "
+                                   "%"PRIu32, flow->in_port.odp_port));
         }
         return NULL;
     }
@@ -2466,9 +2477,18 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
             /* In case recirculation is not actually in use, 'xr.recirc_id'
              * will be set to '0', since a valid 'recirc_id' can
              * not be zero.  */
-            bond_update_post_recirc_rules(out_xbundle->bond,
-                                          &xr.recirc_id,
-                                          &xr.hash_basis);
+            if (ctx->xin->allow_side_effects) {
+                bond_update_post_recirc_rules(out_xbundle->bond,
+                                              &xr.recirc_id,
+                                              &xr.hash_basis);
+            } else {
+                /* If side effects are not allowed, only getting the bond
+                 * configuration.  Rule updates will be handled by the
+                 * main thread later. */
+                bond_get_recirc_id_and_hash_basis(out_xbundle->bond,
+                                                  &xr.recirc_id,
+                                                  &xr.hash_basis);
+            }
             if (xr.recirc_id) {
                 /* Use recirculation instead of output. */
                 use_recirc = true;
@@ -6985,11 +7005,20 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
         }
 
         if (OVS_UNLIKELY(ctx->xin->trace)) {
+            struct ofputil_port_map map = OFPUTIL_PORT_MAP_INITIALIZER(&map);
+
+            if (ctx->xin->names) {
+                struct ofproto_dpif *ofprotop;
+                ofprotop = ofproto_dpif_lookup_by_name(ctx->xbridge->name);
+                ofproto_append_ports_to_map(&map, ofprotop->up.ports);
+            }
+
             struct ds s = DS_EMPTY_INITIALIZER;
-            struct ofpact_format_params fp = { .s = &s };
+            struct ofpact_format_params fp = { .s = &s, .port_map = &map };
             ofpacts_format(a, OFPACT_ALIGN(a->len), &fp);
             xlate_report(ctx, OFT_ACTION, "%s", ds_cstr(&s));
             ds_destroy(&s);
+            ofputil_port_map_destroy(&map);
         }
 
         switch (a->type) {
@@ -7665,6 +7694,43 @@ xlate_wc_finish(struct xlate_ctx *ctx)
             ctx->wc->masks.vlans[i].tci = 0;
         }
     }
+    /* Clear tunnel wc bits if original packet is non-tunnel. */
+    if (!flow_tnl_dst_is_set(&ctx->xin->upcall_flow->tunnel)) {
+        memset(&ctx->wc->masks.tunnel, 0, sizeof ctx->wc->masks.tunnel);
+    }
+}
+
+/* This will optimize the odp actions generated. For now, it will remove
+ * trailing clone actions that are unnecessary. */
+static void
+xlate_optimize_odp_actions(struct xlate_in *xin)
+{
+    struct ofpbuf *actions = xin->odp_actions;
+    struct nlattr *last_action = NULL;
+    struct nlattr *a;
+    int left;
+
+    if (!actions) {
+        return;
+    }
+
+    /* Find the last action in the set. */
+    NL_ATTR_FOR_EACH (a, left, actions->data, actions->size) {
+        last_action = a;
+    }
+
+    /* Remove the trailing clone() action, by directly embedding the nested
+     * actions. */
+    if (last_action && nl_attr_type(last_action) == OVS_ACTION_ATTR_CLONE) {
+        void *dest;
+
+        nl_msg_reset_size(actions,
+                          (unsigned char *) last_action -
+                          (unsigned char *) actions->data);
+
+        dest = nl_msg_put_uninit(actions, nl_attr_get_size(last_action));
+        memmove(dest, nl_attr_get(last_action), nl_attr_get_size(last_action));
+    }
 }
 
 /* Translates the flow, actions, or rule in 'xin' into datapath actions in
@@ -8092,6 +8158,10 @@ exit:
         if (xin->odp_actions) {
             ofpbuf_clear(xin->odp_actions);
         }
+    } else {
+        /* In the non-error case, see if we can further optimize the datapath
+         * rules by removing redundant (clone) actions. */
+        xlate_optimize_odp_actions(xin);
     }
 
     /* Install drop action if datapath supports explicit drop action. */

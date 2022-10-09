@@ -409,8 +409,14 @@ static const struct nl_policy tca_flower_policy[] = {
     [TCA_FLOWER_KEY_ENC_IPV6_DST_MASK] = { .type = NL_A_UNSPEC,
                                            .min_len = sizeof(struct in6_addr),
                                            .optional = true, },
+    [TCA_FLOWER_KEY_ENC_UDP_SRC_PORT] = { .type = NL_A_U16,
+                                          .optional = true, },
+    [TCA_FLOWER_KEY_ENC_UDP_SRC_PORT_MASK] = { .type = NL_A_U16,
+                                               .optional = true, },
     [TCA_FLOWER_KEY_ENC_UDP_DST_PORT] = { .type = NL_A_U16,
                                           .optional = true, },
+    [TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK] = { .type = NL_A_U16,
+                                               .optional = true, },
     [TCA_FLOWER_KEY_FLAGS] = { .type = NL_A_BE32, .optional = true, },
     [TCA_FLOWER_KEY_FLAGS_MASK] = { .type = NL_A_BE32, .optional = true, },
     [TCA_FLOWER_KEY_IP_TTL] = { .type = NL_A_U8,
@@ -721,15 +727,17 @@ flower_tun_geneve_opt_check_len(struct tun_metadata *key,
     const struct geneve_opt *opt, *opt_mask;
     int len, cnt = 0;
 
+    if (key->present.len != mask->present.len) {
+        goto bad_length;
+    }
+
     len = key->present.len;
     while (len) {
         opt = &key->opts.gnv[cnt];
         opt_mask = &mask->opts.gnv[cnt];
 
         if (opt->length != opt_mask->length) {
-            VLOG_ERR_RL(&error_rl,
-                        "failed to parse tun options; key/mask length differ");
-            return EINVAL;
+            goto bad_length;
         }
 
         cnt += sizeof(struct geneve_opt) / 4 + opt->length;
@@ -737,6 +745,11 @@ flower_tun_geneve_opt_check_len(struct tun_metadata *key,
     }
 
     return 0;
+
+bad_length:
+    VLOG_ERR_RL(&error_rl,
+                "failed to parse tun options; key/mask length differ");
+    return EINVAL;
 }
 
 static int
@@ -774,7 +787,15 @@ nl_parse_flower_tunnel(struct nlattr **attrs, struct tc_flower *flower)
         flower->key.tunnel.ipv6.ipv6_dst =
             nl_attr_get_in6_addr(attrs[TCA_FLOWER_KEY_ENC_IPV6_DST]);
     }
-    if (attrs[TCA_FLOWER_KEY_ENC_UDP_DST_PORT]) {
+    if (attrs[TCA_FLOWER_KEY_ENC_UDP_SRC_PORT_MASK]) {
+        flower->mask.tunnel.tp_src =
+            nl_attr_get_be16(attrs[TCA_FLOWER_KEY_ENC_UDP_SRC_PORT_MASK]);
+        flower->key.tunnel.tp_src =
+            nl_attr_get_be16(attrs[TCA_FLOWER_KEY_ENC_UDP_SRC_PORT]);
+    }
+    if (attrs[TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK]) {
+        flower->mask.tunnel.tp_dst =
+            nl_attr_get_be16(attrs[TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK]);
         flower->key.tunnel.tp_dst =
             nl_attr_get_be16(attrs[TCA_FLOWER_KEY_ENC_UDP_DST_PORT]);
     }
@@ -1883,6 +1904,8 @@ nl_parse_single_action(struct nlattr *action, struct tc_flower *flower,
     struct nlattr *act_cookie;
     const char *act_kind;
     struct nlattr *action_attrs[ARRAY_SIZE(act_policy)];
+    int act_index = flower->action_count;
+    bool is_meter = false;
     int err = 0;
 
     if (!nl_parse_nested(action, act_policy, action_attrs,
@@ -1920,6 +1943,7 @@ nl_parse_single_action(struct nlattr *action, struct tc_flower *flower,
         nl_parse_act_ct(act_options, flower);
     } else if (!strcmp(act_kind, "police")) {
         nl_parse_act_police(act_options, flower);
+        is_meter = tc_is_meter_index(flower->actions[act_index].police.index);
     } else {
         VLOG_ERR_RL(&error_rl, "unknown tc action kind: %s", act_kind);
         err = EINVAL;
@@ -1932,6 +1956,14 @@ nl_parse_single_action(struct nlattr *action, struct tc_flower *flower,
     if (act_cookie) {
         flower->act_cookie.data = nl_attr_get(act_cookie);
         flower->act_cookie.len = nl_attr_get_size(act_cookie);
+    }
+
+    /* Skip the stats update when act_police is meter since there are always
+     * some other actions following meter. For other potential kinds of
+     * act_police actions, whose stats could not be skipped (e.g. filter has
+     * only one police action), update the action stats to the flow rule. */
+    if (is_meter) {
+        return 0;
     }
 
     return nl_parse_action_stats(action_attrs[TCA_ACT_STATS],
@@ -3381,13 +3413,16 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
     struct in6_addr *ipv6_dst_mask = &flower->mask.tunnel.ipv6.ipv6_dst;
     struct in6_addr *ipv6_src = &flower->key.tunnel.ipv6.ipv6_src;
     struct in6_addr *ipv6_dst = &flower->key.tunnel.ipv6.ipv6_dst;
-    ovs_be16 tp_dst = flower->key.tunnel.tp_dst;
     ovs_be32 id = be64_to_be32(flower->key.tunnel.id);
+    ovs_be16 tp_src = flower->key.tunnel.tp_src;
+    ovs_be16 tp_dst = flower->key.tunnel.tp_dst;
     uint8_t tos = flower->key.tunnel.tos;
     uint8_t ttl = flower->key.tunnel.ttl;
     uint8_t tos_mask = flower->mask.tunnel.tos;
     uint8_t ttl_mask = flower->mask.tunnel.ttl;
     ovs_be64 id_mask = flower->mask.tunnel.id;
+    ovs_be16 tp_src_mask = flower->mask.tunnel.tp_src;
+    ovs_be16 tp_dst_mask = flower->mask.tunnel.tp_dst;
 
     if (ipv4_dst_mask || ipv4_src_mask) {
         nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_IPV4_DST_MASK,
@@ -3413,8 +3448,15 @@ nl_msg_put_flower_tunnel(struct ofpbuf *request, struct tc_flower *flower)
         nl_msg_put_u8(request, TCA_FLOWER_KEY_ENC_IP_TTL, ttl);
         nl_msg_put_u8(request, TCA_FLOWER_KEY_ENC_IP_TTL_MASK, ttl_mask);
     }
-    if (tp_dst) {
+    if (tp_src_mask) {
+        nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_SRC_PORT, tp_src);
+        nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_SRC_PORT_MASK,
+                        tp_src_mask);
+    }
+    if (tp_dst_mask) {
         nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_DST_PORT, tp_dst);
+        nl_msg_put_be16(request, TCA_FLOWER_KEY_ENC_UDP_DST_PORT_MASK,
+                        tp_dst_mask);
     }
     if (id_mask) {
         nl_msg_put_be32(request, TCA_FLOWER_KEY_ENC_KEY_ID, id);
